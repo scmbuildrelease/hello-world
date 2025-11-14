@@ -27,21 +27,21 @@ jobs:
         python -m pip install --upgrade pip
         pip install pytest
 
-    - name: Build Python project
+    - name: Run Python Hello World
       run: |
-        python setup.py build
+        python hello.py
 
     - name: Build C project
       run: |
         gcc hello.c -o hello
 
+    - name: Run C Hello World
+      run: |
+        ./hello
+
     - name: Run Python tests
       run: |
         pytest tests/
-
-    - name: Run C program
-      run: |
-        ./hello
 
   release:
     needs: build-and-test
