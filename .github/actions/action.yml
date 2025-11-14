@@ -1,0 +1,121 @@
+name: 'Create Release Tag'
+description: 'Creates a release tag based on the specified type (dev, rc, or prod)'
+author: 'GitHub Actions'
+
+inputs:
+  release_type:
+    description: 'Type of release to create. One of "dev", "rc", or "prod". If not provided, the type will be inferred from the git ref.'
+    required: false
+    default: 'dev'
+
+outputs:
+  tag_name:
+    description: 'The name of the created tag'
+    value: ${{ steps.create_tag.outputs.tag_name }}
+  release_type:
+    description: 'The type of release that was created'
+    value: ${{ steps.determine_type.outputs.type }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Determine release type
+      id: determine_type
+      shell: bash
+      run: |
+        RELEASE_TYPE="${{ inputs.release_type }}"
+        
+        # If release_type is empty or not provided, infer from branch
+        if [ -z "$RELEASE_TYPE" ] || [ "$RELEASE_TYPE" == "" ]; then
+          BRANCH_NAME="${GITHUB_REF_NAME}"
+          echo "Release type not provided, inferring from branch: $BRANCH_NAME"
+          
+          if [ "$BRANCH_NAME" == "main" ]; then
+            RELEASE_TYPE="dev"
+          elif [ "$BRANCH_NAME" == "stable" ]; then
+            RELEASE_TYPE="prod"
+          elif [ "$BRANCH_NAME" == "dev1" ]; then
+            RELEASE_TYPE="dev"
+          else
+            RELEASE_TYPE="dev"
+          fi
+          echo "Inferred release type: $RELEASE_TYPE"
+        else
+          echo "Using provided release type: $RELEASE_TYPE"
+        fi
+        
+        echo "type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+    
+    - name: Fetch tags
+      shell: bash
+      run: |
+        git fetch --tags
+    
+    - name: Create tag
+      id: create_tag
+      shell: bash
+      run: |
+        RELEASE_TYPE="${{ steps.determine_type.outputs.type }}"
+        
+        # Get the latest v0.x.0 final release tag (not rc or dev)
+        LATEST_RELEASE=$(git tag -l "v0.*.0" | grep -v "rc" | grep -v "dev" | sort -V | tail -n1)
+        
+        if [ -z "$LATEST_RELEASE" ]; then
+          VERSION_NUMBER=1
+          echo "No existing release found, starting with version 1"
+        else
+          MIDDLE=$(echo $LATEST_RELEASE | sed -n 's/v0\.\([0-9]*\)\.0/\1/p')
+          echo "Current release version: $MIDDLE"
+          VERSION_NUMBER=$MIDDLE
+        fi
+        
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        case "$RELEASE_TYPE" in
+          dev)
+            # Create timestamp in format YYYYMMDDHH
+            TIMESTAMP=$(date -u +'%Y%m%d%H')
+            TAG_NAME="v0.${VERSION_NUMBER}.0-dev${TIMESTAMP}"
+            echo "Creating dev tag: $TAG_NAME"
+            git tag -a $TAG_NAME -m "Development release $TAG_NAME"
+            git push origin $TAG_NAME
+            ;;
+          
+          rc)
+            VERSION_NUMBER=$((VERSION_NUMBER + 1))
+            TAG_NAME="v0.${VERSION_NUMBER}.0-rc1"
+            echo "Creating RC tag: $TAG_NAME"
+            git tag -a $TAG_NAME -m "Release candidate $TAG_NAME"
+            git push origin $TAG_NAME
+            ;;
+          
+          prod)
+            VERSION_NUMBER=$((VERSION_NUMBER + 1))
+            RC_TAG="v0.${VERSION_NUMBER}.0-rc1"
+            FINAL_TAG="v0.${VERSION_NUMBER}.0"
+            
+            echo "Creating RC tag: $RC_TAG"
+            git tag -a $RC_TAG -m "Release candidate $RC_TAG"
+            git push origin $RC_TAG
+            
+            echo "Creating production tag: $FINAL_TAG"
+            git tag -a $FINAL_TAG -m "Production release $FINAL_TAG"
+            git push origin $FINAL_TAG
+            
+            TAG_NAME=$FINAL_TAG
+            ;;
+          
+          *)
+            echo "Error: Invalid release type '$RELEASE_TYPE'"
+            exit 1
+            ;;
+        esac
+        
+        echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+        echo "✅ Successfully created tag: $TAG_NAME"
+
+branding:
+  icon: 'tag'
+  color: 'blue'
+
