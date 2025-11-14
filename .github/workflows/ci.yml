@@ -5,6 +5,17 @@ on:
     branches: [ main, dev1, stable ]
   pull_request:
     branches: [ main, dev1, stable ]
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Type of release to create'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+          - auto
+          - dev
+          - rc
 
 jobs:
   hello-world:
@@ -40,7 +51,10 @@ jobs:
 
   create-dev-tag:
     needs: hello-world
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    if: |
+      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'dev') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'auto' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -54,10 +68,9 @@ jobs:
     - name: Check for new changes
       id: check_changes
       run: |
-        # Fetch all tags
         git fetch --tags
         
-        # Get the latest dev tag on main branch
+        # Get the latest dev tag
         LATEST_DEV_TAG=$(git tag -l "v0.*.0-dev*" | sort -V | tail -n1)
         
         if [ -z "$LATEST_DEV_TAG" ]; then
@@ -71,35 +84,34 @@ jobs:
           echo "Commits since last dev tag: $COMMITS_SINCE_TAG"
           
           if [ "$COMMITS_SINCE_TAG" -gt 0 ]; then
-            echo "New changes detected, will create new tag"
+            echo "✅ New changes detected, will create new tag"
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
-            echo "No new changes since last tag, skipping tag creation"
+            echo "⏭️  No new changes since last tag, skipping tag creation"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
         fi
     
-    - name: Create dev release using custom action
+    - name: Create dev release
       if: steps.check_changes.outputs.has_changes == 'true'
       id: release
       uses: ./.github/actions
+      with:
+        release_type: 'dev'
     
     - name: Display created tag
       if: steps.check_changes.outputs.has_changes == 'true'
       run: |
-        echo "✅ Successfully created tag: ${{ steps.release.outputs.tag_name }}"
-        echo "Release type: ${{ steps.release.outputs.release_type }}"
-    
-    - name: No changes detected
-      if: steps.check_changes.outputs.has_changes == 'false'
-      run: |
-        echo "⏭️ Skipping tag creation - no new changes since last dev tag"
+        echo "✅ Successfully created dev tag!"
+        echo "Tag: ${{ steps.release.outputs.tag_name }}"
+        echo "Type: ${{ steps.release.outputs.release_type }}"
 
-
-
-  create-tag:
+  create-rc-tag:
     needs: hello-world
-    if: github.ref == 'refs/heads/stable' && github.event_name == 'push'
+    if: |
+      (github.ref == 'refs/heads/stable' && github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'rc') ||
+      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'auto' && github.ref == 'refs/heads/stable')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -110,20 +122,9 @@ jobs:
       with:
         fetch-depth: 0
     
-    - name: Debug information
-      run: |
-        echo "Branch: ${{ github.ref }}"
-        echo "Event: ${{ github.event_name }}"
-        echo "Repository: ${{ github.repository }}"
-        echo "Current branch:"
-        git branch -a
-        echo "Existing tags:"
-        git tag -l
-    
     - name: Check for new changes
       id: check_changes
       run: |
-        # Fetch all tags
         git fetch --tags
         
         # Get the latest final release tag (not rc or dev)
@@ -140,32 +141,31 @@ jobs:
           echo "Commits since last release tag: $COMMITS_SINCE_TAG"
           
           if [ "$COMMITS_SINCE_TAG" -gt 0 ]; then
-            echo "New changes detected, will create new release"
+            echo "✅ New changes detected, will create new release"
             echo "has_changes=true" >> $GITHUB_OUTPUT
           else
-            echo "No new changes since last release, skipping tag creation"
+            echo "⏭️  No new changes since last release, skipping tag creation"
             echo "has_changes=false" >> $GITHUB_OUTPUT
           fi
         fi
     
-    - name: Create RC release using custom action
+    - name: Create RC release
       if: steps.check_changes.outputs.has_changes == 'true'
       id: release
       uses: ./.github/actions
+      with:
+        release_type: 'rc'
+    
+    - name: Create production tag
+      if: steps.check_changes.outputs.has_changes == 'true'
+      id: prod_release
+      uses: ./.github/actions
+      with:
+        release_type: 'prod'
     
     - name: Display created tags
       if: steps.check_changes.outputs.has_changes == 'true'
       run: |
-        echo "✅ Successfully created RC release!"
+        echo "✅ Successfully created RC and Production releases!"
         echo "RC tag: ${{ steps.release.outputs.tag_name }}"
-        echo "Release type: ${{ steps.release.outputs.release_type }}"
-    
-    - name: No changes detected
-      if: steps.check_changes.outputs.has_changes == 'false'
-      run: |
-        echo "⏭️ Skipping release - no new changes since last release tag"
-
-
-
-
-
+        echo "Prod tag: ${{ steps.prod_release.outputs.tag_name }}"
