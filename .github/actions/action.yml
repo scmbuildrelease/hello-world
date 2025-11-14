@@ -76,33 +76,112 @@ runs:
         
         case "$RELEASE_TYPE" in
           dev)
+            # Bump version for dev tags too
+            VERSION_NUMBER=$((VERSION_NUMBER + 1))
+            
             # Create timestamp in format YYYYMMDDHH
             TIMESTAMP=$(date -u +'%Y%m%d%H')
             TAG_NAME="v0.${VERSION_NUMBER}.0-dev${TIMESTAMP}"
+            
+            # Check if tag already exists
+            if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+              echo "⚠️  Tag $TAG_NAME already exists, skipping creation"
+              echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
             echo "Creating dev tag: $TAG_NAME"
-            git tag -a $TAG_NAME -m "Development release $TAG_NAME"
+            DESCRIBE=$(git describe --always --tags || echo "initial")
+            git tag -a $TAG_NAME -m "Development release $TAG_NAME (from $DESCRIBE)"
             git push origin $TAG_NAME
             ;;
           
           rc)
+            # Use git describe to find the nearest tag
+            NEAREST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            
+            if [ -z "$NEAREST_TAG" ]; then
+              VERSION_NUMBER=1
+              echo "No existing tags found, starting with version 1"
+            else
+              echo "Nearest tag in history: $NEAREST_TAG"
+              
+              # Extract version number from nearest tag (could be dev, rc, or prod)
+              # Remove 'v' prefix and extract middle number
+              MIDDLE=$(echo $NEAREST_TAG | sed -n 's/v0\.\([0-9]*\)\.0.*/\1/p')
+              
+              if [ -z "$MIDDLE" ]; then
+                VERSION_NUMBER=1
+                echo "Could not parse version from $NEAREST_TAG, using version 1"
+              else
+                VERSION_NUMBER=$MIDDLE
+                echo "Extracted version: $VERSION_NUMBER from nearest tag"
+              fi
+            fi
+            
             VERSION_NUMBER=$((VERSION_NUMBER + 1))
             TAG_NAME="v0.${VERSION_NUMBER}.0-rc1"
-            echo "Creating RC tag: $TAG_NAME"
-            git tag -a $TAG_NAME -m "Release candidate $TAG_NAME"
+            
+            # Check if tag already exists
+            if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
+              echo "⚠️  Tag $TAG_NAME already exists, skipping creation"
+              echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            echo "Creating RC tag: $TAG_NAME (bumped from nearest tag)"
+            DESCRIBE=$(git describe --always --tags || echo "initial")
+            git tag -a $TAG_NAME -m "Release candidate $TAG_NAME (from $DESCRIBE)"
             git push origin $TAG_NAME
             ;;
           
           prod)
+            # Use git describe to find the nearest tag
+            NEAREST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+            
+            if [ -z "$NEAREST_TAG" ]; then
+              VERSION_NUMBER=1
+              echo "No existing tags found, starting with version 1"
+            else
+              echo "Nearest tag in history: $NEAREST_TAG"
+              
+              # Extract version number from nearest tag (could be dev, rc, or prod)
+              MIDDLE=$(echo $NEAREST_TAG | sed -n 's/v0\.\([0-9]*\)\.0.*/\1/p')
+              
+              if [ -z "$MIDDLE" ]; then
+                VERSION_NUMBER=1
+                echo "Could not parse version from $NEAREST_TAG, using version 1"
+              else
+                VERSION_NUMBER=$MIDDLE
+                echo "Extracted version: $VERSION_NUMBER from nearest tag"
+              fi
+            fi
+            
             VERSION_NUMBER=$((VERSION_NUMBER + 1))
             RC_TAG="v0.${VERSION_NUMBER}.0-rc1"
             FINAL_TAG="v0.${VERSION_NUMBER}.0"
             
-            echo "Creating RC tag: $RC_TAG"
-            git tag -a $RC_TAG -m "Release candidate $RC_TAG"
-            git push origin $RC_TAG
+            # Check if RC tag already exists
+            if git rev-parse "$RC_TAG" >/dev/null 2>&1; then
+              echo "⚠️  RC tag $RC_TAG already exists"
+            else
+              echo "Creating RC tag: $RC_TAG"
+              DESCRIBE=$(git describe --always --tags || echo "initial")
+              git tag -a $RC_TAG -m "Release candidate $RC_TAG (from $DESCRIBE)"
+              git push origin $RC_TAG
+            fi
+            
+            # Check if final tag already exists
+            if git rev-parse "$FINAL_TAG" >/dev/null 2>&1; then
+              echo "⚠️  Production tag $FINAL_TAG already exists, skipping"
+              TAG_NAME=$FINAL_TAG
+              echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+              exit 0
+            fi
             
             echo "Creating production tag: $FINAL_TAG"
-            git tag -a $FINAL_TAG -m "Production release $FINAL_TAG"
+            DESCRIBE=$(git describe --always --tags || echo "initial")
+            git tag -a $FINAL_TAG -m "Production release $FINAL_TAG (from $DESCRIBE)"
             git push origin $FINAL_TAG
             
             TAG_NAME=$FINAL_TAG
