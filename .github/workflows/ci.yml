@@ -1,29 +1,143 @@
-name: CI Pipeline
+name: Package and Release
 
 on:
   push:
-    branches: [ main, dev1, stable ]
+    branches: [ main, stable ]
   pull_request:
-    branches: [ main, dev1, stable ]
+    branches: [ main, stable ]
+  schedule:
+    # Daily at 00:00 UTC (nightly builds)
+    - cron: '0 0 * * *'
   workflow_dispatch:
     inputs:
-      release_type:
+      release-type:
         description: 'Type of release to create'
         required: false
-        default: 'auto'
+        default: 'dev'
         type: choice
         options:
-          - auto
           - dev
           - rc
+          - prod
+      dry-run:
+        description: 'Dry run (skip publishing)'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
-  hello-world:
+  release-precheck:
+    runs-on: ubuntu-latest
+    outputs:
+      release-type: ${{ steps.determine.outputs.release-type }}
+      should-create-release: ${{ steps.check.outputs.should-create-release }}
+      is-release-candidate: ${{ steps.determine.outputs.is-release-candidate }}
+      bump-type: ${{ steps.semantic.outputs.bump-type }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+    
+    - name: Determine release type
+      id: determine
+      run: |
+        # Scheduled runs default to dev
+        if [ "${{ github.event_name }}" == "schedule" ]; then
+          RELEASE_TYPE="dev"
+          echo "📅 Scheduled run: creating dev build"
+        elif [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          RELEASE_TYPE="${{ inputs.release-type }}"
+          echo "👤 Manual trigger: release-type=$RELEASE_TYPE"
+        elif [ "${{ github.ref }}" == "refs/heads/stable" ] && [ "${{ github.event_name }}" == "push" ]; then
+          RELEASE_TYPE="rc"
+          echo "🔄 Push to stable: creating RC"
+        elif [ "${{ github.ref }}" == "refs/heads/main" ] && [ "${{ github.event_name }}" == "push" ]; then
+          RELEASE_TYPE="dev"
+          echo "🔄 Push to main: creating dev build"
+        else
+          RELEASE_TYPE="none"
+          echo "ℹ️  No release needed"
+        fi
+        
+        echo "release-type=$RELEASE_TYPE" >> $GITHUB_OUTPUT
+        
+        # Determine if this is a release candidate
+        if [ "$RELEASE_TYPE" == "rc" ] || [ "$RELEASE_TYPE" == "prod" ]; then
+          echo "is-release-candidate=true" >> $GITHUB_OUTPUT
+        else
+          echo "is-release-candidate=false" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Check semantic version from commit messages
+      id: semantic
+      run: |
+        # Get last commit message
+        COMMIT_MSG=$(git log -1 --pretty=%B)
+        
+        echo "📝 Commit message: $COMMIT_MSG"
+        
+        # Check for version bump keywords
+        if echo "$COMMIT_MSG" | grep -qi "(MAJOR)"; then
+          echo "bump-type=MAJOR" >> $GITHUB_OUTPUT
+          echo "✅ MAJOR version bump detected"
+        elif echo "$COMMIT_MSG" | grep -qi "(MINOR)"; then
+          echo "bump-type=MINOR" >> $GITHUB_OUTPUT
+          echo "✅ MINOR version bump detected"
+        elif echo "$COMMIT_MSG" | grep -qi "(PATCH)"; then
+          echo "bump-type=PATCH" >> $GITHUB_OUTPUT
+          echo "✅ PATCH version bump detected"
+        else
+          echo "bump-type=NONE" >> $GITHUB_OUTPUT
+          echo "ℹ️  No version bump indicator"
+        fi
+    
+    - name: Check if should create release
+      id: check
+      run: |
+        RELEASE_TYPE="${{ steps.determine.outputs.release-type }}"
+        
+        if [ "$RELEASE_TYPE" == "none" ]; then
+          echo "should-create-release=false" >> $GITHUB_OUTPUT
+          echo "⏭️  Skipping release creation"
+          exit 0
+        fi
+        
+        # For stable branch, only create release if there are new commits
+        if [ "${{ github.ref }}" == "refs/heads/stable" ]; then
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          
+          if [ -z "$LATEST_TAG" ]; then
+            echo "should-create-release=true" >> $GITHUB_OUTPUT
+            echo "✅ No previous tags, creating release"
+          else
+            COMMITS_SINCE=$(git rev-list ${LATEST_TAG}..HEAD --count)
+            echo "📊 Commits since $LATEST_TAG: $COMMITS_SINCE"
+            
+            if [ "$COMMITS_SINCE" -gt 0 ]; then
+              echo "should-create-release=true" >> $GITHUB_OUTPUT
+              echo "✅ New commits detected, creating release"
+            else
+              echo "should-create-release=false" >> $GITHUB_OUTPUT
+              echo "⏭️  No new commits, skipping release"
+            fi
+          fi
+        else
+          echo "should-create-release=true" >> $GITHUB_OUTPUT
+          echo "✅ Will create release"
+        fi
+
+  build-and-test:
+    needs: release-precheck
+    if: needs.release-precheck.outputs.should-create-release == 'true'
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
       
     - name: Set up Python
       uses: actions/setup-python@v4
@@ -48,16 +162,20 @@ jobs:
       run: |
         export PYTHONPATH=$PYTHONPATH:$(pwd)
         pytest tests/ -v
+    
+    - name: Test Status
+      run: |
+        echo "✅ All tests passed successfully"
 
-  create-dev-tag:
-    needs: hello-world
-    if: |
-      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'dev') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'auto' && github.ref == 'refs/heads/main')
+  create-tag:
+    needs: [release-precheck, build-and-test]
+    if: needs.release-precheck.outputs.should-create-release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      tag-version: ${{ steps.create.outputs.tag-version }}
+      semantic-version: ${{ steps.version.outputs.version }}
     
     steps:
     - name: Checkout code
@@ -65,56 +183,87 @@ jobs:
       with:
         fetch-depth: 0
     
-    - name: Check for new changes
-      id: check_changes
+    - name: Calculate semantic version
+      id: version
       run: |
-        git fetch --tags
-        
-        # Get the latest dev tag
-        LATEST_DEV_TAG=$(git tag -l "v0.*.0-dev*" | sort -V | tail -n1)
-        
-        if [ -z "$LATEST_DEV_TAG" ]; then
-          echo "No previous dev tag found, will create new tag"
-          echo "has_changes=true" >> $GITHUB_OUTPUT
+        # Read VERSION file
+        if [ -f "VERSION" ]; then
+          BASE_VERSION=$(cat VERSION | tr -d '\n')
         else
-          echo "Latest dev tag: $LATEST_DEV_TAG"
-          
-          # Check if there are new commits since the last dev tag
-          COMMITS_SINCE_TAG=$(git rev-list ${LATEST_DEV_TAG}..HEAD --count)
-          echo "Commits since last dev tag: $COMMITS_SINCE_TAG"
-          
-          if [ "$COMMITS_SINCE_TAG" -gt 0 ]; then
-            echo "✅ New changes detected, will create new tag"
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          else
-            echo "⏭️  No new changes since last tag, skipping tag creation"
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          fi
+          BASE_VERSION="0.1.0"
         fi
+        
+        echo "version=$BASE_VERSION" >> $GITHUB_OUTPUT
+        echo "📦 Base version: $BASE_VERSION"
     
-    - name: Create dev release
-      if: steps.check_changes.outputs.has_changes == 'true'
-      id: release
-      uses: ./.github/actions
-      with:
-        release_type: 'dev'
-    
-    - name: Display created tag
-      if: steps.check_changes.outputs.has_changes == 'true'
+    - name: Create and push tag
+      id: create
       run: |
-        echo "✅ Successfully created dev tag!"
-        echo "Tag: ${{ steps.release.outputs.tag_name }}"
-        echo "Type: ${{ steps.release.outputs.release_type }}"
+        RELEASE_TYPE="${{ needs.release-precheck.outputs.release-type }}"
+        BASE_VERSION="${{ steps.version.outputs.version }}"
+        DRY_RUN="${{ inputs.dry-run }}"
+        
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+        case "$RELEASE_TYPE" in
+          dev)
+            # Format: vX.Y.Z-devYYYYMMDD
+            DATE_SUFFIX=$(date -u +'%Y%m%d')
+            TAG_VERSION="v${BASE_VERSION}-dev${DATE_SUFFIX}"
+            TAG_MESSAGE="Development build $TAG_VERSION"
+            ;;
+          
+          rc)
+            # Format: vX.Y.Z-rcN (increment N)
+            RC_COUNT=$(git tag -l "v${BASE_VERSION}-rc*" | wc -l)
+            RC_NUM=$((RC_COUNT + 1))
+            TAG_VERSION="v${BASE_VERSION}-rc${RC_NUM}"
+            TAG_MESSAGE="Release candidate $TAG_VERSION"
+            ;;
+          
+          prod)
+            # Format: vX.Y.Z
+            TAG_VERSION="v${BASE_VERSION}"
+            TAG_MESSAGE="Production release $TAG_VERSION"
+            ;;
+          
+          *)
+            echo "❌ Invalid release type: $RELEASE_TYPE"
+            exit 1
+            ;;
+        esac
+        
+        echo "tag-version=$TAG_VERSION" >> $GITHUB_OUTPUT
+        echo "🏷️  Tag: $TAG_VERSION"
+        
+        if [ "$DRY_RUN" == "true" ]; then
+          echo "🔍 DRY RUN: Would create tag $TAG_VERSION"
+          exit 0
+        fi
+        
+        # Check if tag exists
+        if git rev-parse "$TAG_VERSION" >/dev/null 2>&1; then
+          echo "⚠️  Tag $TAG_VERSION exists, force updating..."
+          git tag -fa $TAG_VERSION -m "$TAG_MESSAGE"
+          git push -f origin $TAG_VERSION
+        else
+          echo "✅ Creating new tag $TAG_VERSION"
+          git tag -a $TAG_VERSION -m "$TAG_MESSAGE"
+          git push origin $TAG_VERSION
+        fi
+        
+        echo "✅ Tag created: $TAG_VERSION"
 
-  create-rc-tag:
-    needs: hello-world
+  create-changelog:
+    needs: [release-precheck, create-tag]
     if: |
-      (github.ref == 'refs/heads/stable' && github.event_name == 'push') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'rc') ||
-      (github.event_name == 'workflow_dispatch' && inputs.release_type == 'auto' && github.ref == 'refs/heads/stable')
+      needs.release-precheck.outputs.should-create-release == 'true' &&
+      needs.release-precheck.outputs.is-release-candidate == 'true' &&
+      !inputs.dry-run
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    outputs:
+      changelog: ${{ steps.generate.outputs.changelog }}
     
     steps:
     - name: Checkout code
@@ -122,42 +271,138 @@ jobs:
       with:
         fetch-depth: 0
     
-    - name: Check for new changes
-      id: check_changes
+    - name: Generate changelog
+      id: generate
       run: |
-        git fetch --tags
+        TAG_VERSION="${{ needs.create-tag.outputs.tag-version }}"
         
-        # Get the latest final release tag (not rc or dev)
-        LATEST_RELEASE=$(git tag -l "v0.*.0" | grep -v "rc" | grep -v "dev" | sort -V | tail -n1)
+        # Get previous tag
+        PREV_TAG=$(git describe --tags --abbrev=0 ${TAG_VERSION}^ 2>/dev/null || echo "")
         
-        if [ -z "$LATEST_RELEASE" ]; then
-          echo "No previous release tag found, will create new tag"
-          echo "has_changes=true" >> $GITHUB_OUTPUT
+        if [ -z "$PREV_TAG" ]; then
+          echo "📝 First release, including all commits"
+          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
         else
-          echo "Latest release tag: $LATEST_RELEASE"
-          
-          # Check if there are new commits since the last release tag
-          COMMITS_SINCE_TAG=$(git rev-list ${LATEST_RELEASE}..HEAD --count)
-          echo "Commits since last release tag: $COMMITS_SINCE_TAG"
-          
-          if [ "$COMMITS_SINCE_TAG" -gt 0 ]; then
-            echo "✅ New changes detected, will create new release"
-            echo "has_changes=true" >> $GITHUB_OUTPUT
-          else
-            echo "⏭️  No new changes since last release, skipping tag creation"
-            echo "has_changes=false" >> $GITHUB_OUTPUT
-          fi
+          echo "📝 Generating changelog from $PREV_TAG to $TAG_VERSION"
+          CHANGELOG=$(git log ${PREV_TAG}..${TAG_VERSION} --pretty=format:"- %s (%h)" --no-merges)
         fi
+        
+        # Save to file for GitHub Release
+        echo "## What's Changed" > changelog.md
+        echo "" >> changelog.md
+        echo "$CHANGELOG" >> changelog.md
+        echo "" >> changelog.md
+        echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${TAG_VERSION}" >> changelog.md
+        
+        # Output for next job
+        echo "changelog<<EOF" >> $GITHUB_OUTPUT
+        cat changelog.md >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+
+  create-release:
+    needs: [release-precheck, create-tag, create-changelog]
+    if: |
+      needs.release-precheck.outputs.should-create-release == 'true' &&
+      needs.release-precheck.outputs.is-release-candidate == 'true' &&
+      !inputs.dry-run
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     
-    - name: Create RC and Production release
-      if: steps.check_changes.outputs.has_changes == 'true'
-      id: release
-      uses: ./.github/actions
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+    
+    - name: Create GitHub Release
+      uses: actions/github-script@v6
       with:
-        release_type: 'prod'
+        script: |
+          const tagVersion = '${{ needs.create-tag.outputs.tag-version }}';
+          const releaseType = '${{ needs.release-precheck.outputs.release-type }}';
+          const changelog = `${{ needs.create-changelog.outputs.changelog }}`;
+          
+          let isPrerelease = releaseType === 'rc';
+          let isDraft = releaseType === 'rc';
+          let name = tagVersion;
+          
+          if (releaseType === 'rc') {
+            name = `🧪 Release Candidate ${tagVersion}`;
+          } else if (releaseType === 'prod') {
+            name = `🎉 Release ${tagVersion}`;
+          }
+          
+          try {
+            await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagVersion,
+              name: name,
+              body: changelog || 'See commit history for details.',
+              draft: isDraft,
+              prerelease: isPrerelease
+            });
+            
+            console.log(`✅ Created release: ${tagVersion}`);
+          } catch (error) {
+            console.log(`⚠️  Release may already exist: ${error.message}`);
+          }
+
+  trigger-prod-after-rc-success:
+    needs: [release-precheck, create-tag, create-release]
+    if: |
+      needs.release-precheck.outputs.release-type == 'rc' &&
+      needs.release-precheck.outputs.should-create-release == 'true' &&
+      !inputs.dry-run
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
     
-    - name: Display created tags
-      if: steps.check_changes.outputs.has_changes == 'true'
+    steps:
+    - name: Trigger production release
+      uses: actions/github-script@v6
+      with:
+        script: |
+          console.log('✅ RC build successful, triggering production release...');
+          
+          await github.rest.actions.createWorkflowDispatch({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            workflow_id: 'ci.yml',
+            ref: 'stable',
+            inputs: {
+              'release-type': 'prod',
+              'dry-run': 'false'
+            }
+          });
+          
+          console.log('🚀 Production release triggered');
+
+  summary:
+    needs: [release-precheck, build-and-test, create-tag]
+    if: always() && needs.release-precheck.outputs.should-create-release == 'true'
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Release summary
       run: |
-        echo "✅ Successfully created RC and Production releases!"
-        echo "Tags: ${{ steps.release.outputs.tag_name }}"
+        echo "## 📊 Release Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Release Type**: ${{ needs.release-precheck.outputs.release-type }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Tag**: ${{ needs.create-tag.outputs.tag-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ needs.create-tag.outputs.semantic-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Branch**: ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Commit**: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Dry Run**: ${{ inputs.dry-run || 'false' }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ "${{ needs.build-and-test.result }}" == "success" ]; then
+          echo "✅ **Build & Test**: Passed" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Build & Test**: Failed" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        if [ "${{ needs.create-tag.result }}" == "success" ]; then
+          echo "✅ **Tag Creation**: Success" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "❌ **Tag Creation**: Failed" >> $GITHUB_STEP_SUMMARY
+        fi
