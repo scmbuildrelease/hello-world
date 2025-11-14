@@ -1,4 +1,4 @@
-name: Hello World CI
+name: Hello World TWO CI
 
 on:
   push:
@@ -12,18 +12,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: [3.8, 3.9, 3.10]
+        python-version: ['3.8', '3.9', '3.10']
 
     steps:
     - uses: actions/checkout@v3
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
-
-    - name: Set up C compiler
-      uses: actions/setup-gcc@v1
 
     - name: Install dependencies
       run: |
@@ -36,7 +33,7 @@ jobs:
 
     - name: Build C project
       run: |
-        gcc hello_world.c -o hello_world
+        gcc hello.c -o hello
 
     - name: Run Python tests
       run: |
@@ -44,7 +41,7 @@ jobs:
 
     - name: Run C program
       run: |
-        ./hello_world
+        ./hello
 
   release:
     needs: build-and-test
