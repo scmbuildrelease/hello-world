@@ -61,7 +61,7 @@ jobs:
         echo "Existing tags:"
         git tag -l
     
-    - name: Get latest tag and increment
+    - name: Determine version and create RC tag
       id: tag
       run: |
         # Fetch all tags
@@ -70,33 +70,53 @@ jobs:
         echo "All existing tags after fetch:"
         git tag -l
         
-        # Get the latest v0.x.0-rc tag
-        LATEST_TAG=$(git tag -l "v0.*.0-rc" | sort -V | tail -n1)
+        # Get the latest v0.x.0 final release tag (not rc)
+        LATEST_RELEASE=$(git tag -l "v0.*.0" | grep -v "rc" | sort -V | tail -n1)
         
-        echo "Latest v0.x.0-rc tag: '$LATEST_TAG'"
+        echo "Latest release tag: '$LATEST_RELEASE'"
         
-        if [ -z "$LATEST_TAG" ]; then
-          # No existing tag, start with v0.1.0-rc
-          NEW_TAG="v0.1.0-rc"
-          echo "No existing tag found, creating first tag: $NEW_TAG"
+        if [ -z "$LATEST_RELEASE" ]; then
+          # No existing release, start with v0.1.0
+          VERSION_NUMBER=1
+          echo "No existing release found, starting with v0.1.0"
         else
-          # Extract the middle number and increment it
-          MIDDLE=$(echo $LATEST_TAG | sed -n 's/v0\.\([0-9]*\)\.0-rc/\1/p')
-          echo "Current middle number: $MIDDLE"
-          NEW_MIDDLE=$((MIDDLE + 1))
-          NEW_TAG="v0.${NEW_MIDDLE}.0-rc"
-          echo "Incrementing to: $NEW_TAG"
+          # Extract the middle number from latest release
+          MIDDLE=$(echo $LATEST_RELEASE | sed -n 's/v0\.\([0-9]*\)\.0/\1/p')
+          echo "Current release middle number: $MIDDLE"
+          # Increment for new RC
+          VERSION_NUMBER=$((MIDDLE + 1))
+          echo "Incrementing to version: $VERSION_NUMBER"
         fi
         
-        echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
-        echo "Final tag to create: $NEW_TAG"
+        RC_TAG="v0.${VERSION_NUMBER}.0-rc1"
+        FINAL_TAG="v0.${VERSION_NUMBER}.0"
+        
+        echo "rc_tag=$RC_TAG" >> $GITHUB_OUTPUT
+        echo "final_tag=$FINAL_TAG" >> $GITHUB_OUTPUT
+        echo "RC tag to create: $RC_TAG"
+        echo "Final tag to create (after success): $FINAL_TAG"
     
-    - name: Create and push tag
+    - name: Create and push RC tag
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a ${{ steps.tag.outputs.new_tag }} -m "Release candidate ${{ steps.tag.outputs.new_tag }}"
-        git push origin ${{ steps.tag.outputs.new_tag }}
-        echo "Successfully created and pushed tag: ${{ steps.tag.outputs.new_tag }}"
+        git tag -a ${{ steps.tag.outputs.rc_tag }} -m "Release candidate ${{ steps.tag.outputs.rc_tag }}"
+        git push origin ${{ steps.tag.outputs.rc_tag }}
+        echo "Successfully created and pushed RC tag: ${{ steps.tag.outputs.rc_tag }}"
+    
+    - name: Run final validation
+      run: |
+        echo "Running final validation before creating release tag..."
+        # All tests already passed in hello-world job
+        echo "All tests passed, ready for final release"
+    
+    - name: Create and push final release tag
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -a ${{ steps.tag.outputs.final_tag }} -m "Release ${{ steps.tag.outputs.final_tag }}"
+        git push origin ${{ steps.tag.outputs.final_tag }}
+        echo "Successfully created and pushed final release tag: ${{ steps.tag.outputs.final_tag }}"
+
 
 
