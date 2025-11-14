@@ -51,27 +51,45 @@ jobs:
       with:
         fetch-depth: 0
     
+    - name: Debug information
+      run: |
+        echo "Branch: ${{ github.ref }}"
+        echo "Event: ${{ github.event_name }}"
+        echo "Repository: ${{ github.repository }}"
+        echo "Current branch:"
+        git branch -a
+        echo "Existing tags:"
+        git tag -l
+    
     - name: Get latest tag and increment
       id: tag
       run: |
         # Fetch all tags
         git fetch --tags
         
+        echo "All existing tags after fetch:"
+        git tag -l
+        
         # Get the latest v0.x.0-rc tag
         LATEST_TAG=$(git tag -l "v0.*.0-rc" | sort -V | tail -n1)
+        
+        echo "Latest v0.x.0-rc tag: '$LATEST_TAG'"
         
         if [ -z "$LATEST_TAG" ]; then
           # No existing tag, start with v0.1.0-rc
           NEW_TAG="v0.1.0-rc"
+          echo "No existing tag found, creating first tag: $NEW_TAG"
         else
           # Extract the middle number and increment it
           MIDDLE=$(echo $LATEST_TAG | sed -n 's/v0\.\([0-9]*\)\.0-rc/\1/p')
+          echo "Current middle number: $MIDDLE"
           NEW_MIDDLE=$((MIDDLE + 1))
           NEW_TAG="v0.${NEW_MIDDLE}.0-rc"
+          echo "Incrementing to: $NEW_TAG"
         fi
         
         echo "new_tag=$NEW_TAG" >> $GITHUB_OUTPUT
-        echo "Creating tag: $NEW_TAG"
+        echo "Final tag to create: $NEW_TAG"
     
     - name: Create and push tag
       run: |
@@ -79,4 +97,6 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag -a ${{ steps.tag.outputs.new_tag }} -m "Release candidate ${{ steps.tag.outputs.new_tag }}"
         git push origin ${{ steps.tag.outputs.new_tag }}
+        echo "Successfully created and pushed tag: ${{ steps.tag.outputs.new_tag }}"
+
 
