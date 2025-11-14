@@ -6,7 +6,7 @@ inputs:
   release_type:
     description: 'Type of release to create. One of "dev", "rc", or "prod". If not provided, the type will be inferred from the git ref.'
     required: false
-    default: ''
+    default: 'dev'
 
 outputs:
   tag_name:
@@ -51,8 +51,7 @@ runs:
     
     - name: Fetch tags
       shell: bash
-      run: |
-        git fetch --tags
+      run: git fetch --tags
     
     - name: Create tag
       id: create_tag
@@ -110,7 +109,8 @@ runs:
             ;;
           
           *)
-            echo "Error: Invalid release type '$RELEASE_TYPE'"
+            echo "❌ Error: Invalid release type '$RELEASE_TYPE'"
+            echo "Valid options: dev, rc, prod"
             exit 1
             ;;
         esac
@@ -121,4 +121,3 @@ runs:
 branding:
   icon: 'tag'
   color: 'blue'
-
