@@ -83,8 +83,6 @@ jobs:
       if: steps.check_changes.outputs.has_changes == 'true'
       id: release
       uses: ./.github/actions
-      with:
-        release_type: 'dev'
     
     - name: Display created tag
       if: steps.check_changes.outputs.has_changes == 'true'
@@ -150,18 +148,16 @@ jobs:
           fi
         fi
     
-    - name: Create production release using custom action
+    - name: Create RC release using custom action
       if: steps.check_changes.outputs.has_changes == 'true'
       id: release
       uses: ./.github/actions
-      with:
-        release_type: 'prod'
     
     - name: Display created tags
       if: steps.check_changes.outputs.has_changes == 'true'
       run: |
-        echo "✅ Successfully created production release!"
-        echo "Final tag: ${{ steps.release.outputs.tag_name }}"
+        echo "✅ Successfully created RC release!"
+        echo "RC tag: ${{ steps.release.outputs.tag_name }}"
         echo "Release type: ${{ steps.release.outputs.release_type }}"
     
     - name: No changes detected
