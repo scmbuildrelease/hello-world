@@ -6,7 +6,7 @@ inputs:
   release_type:
     description: 'Type of release to create. One of "dev", "rc", or "prod". If not provided, the type will be inferred from the git ref.'
     required: false
-    default: 'dev'
+    default: ''
 
 outputs:
   tag_name:
@@ -26,20 +26,23 @@ runs:
         RELEASE_TYPE="${{ inputs.release_type }}"
         
         # If release_type is empty or not provided, infer from branch
-        if [ -z "$RELEASE_TYPE" ] || [ "$RELEASE_TYPE" == "" ]; then
+        if [ -z "$RELEASE_TYPE" ]; then
           BRANCH_NAME="${GITHUB_REF_NAME}"
           echo "Release type not provided, inferring from branch: $BRANCH_NAME"
           
           if [ "$BRANCH_NAME" == "main" ]; then
             RELEASE_TYPE="dev"
+            echo "Inferred release type: dev (from main branch)"
           elif [ "$BRANCH_NAME" == "stable" ]; then
-            RELEASE_TYPE="prod"
+            RELEASE_TYPE="rc"
+            echo "Inferred release type: rc (from stable branch)"
           elif [ "$BRANCH_NAME" == "dev1" ]; then
             RELEASE_TYPE="dev"
+            echo "Inferred release type: dev (from dev1 branch)"
           else
             RELEASE_TYPE="dev"
+            echo "Inferred release type: dev (default)"
           fi
-          echo "Inferred release type: $RELEASE_TYPE"
         else
           echo "Using provided release type: $RELEASE_TYPE"
         fi
