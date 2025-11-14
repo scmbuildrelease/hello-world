@@ -79,54 +79,24 @@ jobs:
           fi
         fi
     
-    - name: Determine version and create dev tag
+    - name: Create dev release using custom action
       if: steps.check_changes.outputs.has_changes == 'true'
-      id: devtag
-      run: |
-        # Fetch all tags
-        git fetch --tags
-        
-        echo "All existing tags:"
-        git tag -l
-        
-        # Get the latest v0.x.0 final release tag (not rc or dev)
-        LATEST_RELEASE=$(git tag -l "v0.*.0" | grep -v "rc" | grep -v "dev" | sort -V | tail -n1)
-        
-        echo "Latest release tag: '$LATEST_RELEASE'"
-        
-        if [ -z "$LATEST_RELEASE" ]; then
-          # No existing release, use v0.1.0 for dev
-          VERSION_NUMBER=1
-          echo "No existing release found, using v0.1.0 for dev tag"
-        else
-          # Extract the middle number from latest release
-          MIDDLE=$(echo $LATEST_RELEASE | sed -n 's/v0\.\([0-9]*\)\.0/\1/p')
-          echo "Current release middle number: $MIDDLE"
-          # Use same version for dev tag
-          VERSION_NUMBER=$MIDDLE
-        fi
-        
-        # Create timestamp in format YYYYMMDDHH
-        TIMESTAMP=$(date -u +'%Y%m%d%H')
-        
-        DEV_TAG="v0.${VERSION_NUMBER}.0-dev${TIMESTAMP}"
-        
-        echo "dev_tag=$DEV_TAG" >> $GITHUB_OUTPUT
-        echo "Dev tag to create: $DEV_TAG"
+      id: release
+      uses: ./.github/actions
+      with:
+        release_type: 'dev'
     
-    - name: Create and push dev tag
+    - name: Display created tag
       if: steps.check_changes.outputs.has_changes == 'true'
       run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a ${{ steps.devtag.outputs.dev_tag }} -m "Development build ${{ steps.devtag.outputs.dev_tag }}"
-        git push origin ${{ steps.devtag.outputs.dev_tag }}
-        echo "Successfully created and pushed dev tag: ${{ steps.devtag.outputs.dev_tag }}"
+        echo "✅ Successfully created tag: ${{ steps.release.outputs.tag_name }}"
+        echo "Release type: ${{ steps.release.outputs.release_type }}"
     
     - name: No changes detected
       if: steps.check_changes.outputs.has_changes == 'false'
       run: |
         echo "⏭️ Skipping tag creation - no new changes since last dev tag"
+
 
 
   create-tag:
@@ -180,71 +150,25 @@ jobs:
           fi
         fi
     
-    - name: Determine version and create RC tag
+    - name: Create production release using custom action
       if: steps.check_changes.outputs.has_changes == 'true'
-      id: tag
-      run: |
-        # Fetch all tags
-        git fetch --tags
-        
-        echo "All existing tags after fetch:"
-        git tag -l
-        
-        # Get the latest v0.x.0 final release tag (not rc)
-        LATEST_RELEASE=$(git tag -l "v0.*.0" | grep -v "rc" | grep -v "dev" | sort -V | tail -n1)
-        
-        echo "Latest release tag: '$LATEST_RELEASE'"
-        
-        if [ -z "$LATEST_RELEASE" ]; then
-          # No existing release, start with v0.1.0
-          VERSION_NUMBER=1
-          echo "No existing release found, starting with v0.1.0"
-        else
-          # Extract the middle number from latest release
-          MIDDLE=$(echo $LATEST_RELEASE | sed -n 's/v0\.\([0-9]*\)\.0/\1/p')
-          echo "Current release middle number: $MIDDLE"
-          # Increment for new RC
-          VERSION_NUMBER=$((MIDDLE + 1))
-          echo "Incrementing to version: $VERSION_NUMBER"
-        fi
-        
-        RC_TAG="v0.${VERSION_NUMBER}.0-rc1"
-        FINAL_TAG="v0.${VERSION_NUMBER}.0"
-        
-        echo "rc_tag=$RC_TAG" >> $GITHUB_OUTPUT
-        echo "final_tag=$FINAL_TAG" >> $GITHUB_OUTPUT
-        echo "RC tag to create: $RC_TAG"
-        echo "Final tag to create (after success): $FINAL_TAG"
+      id: release
+      uses: ./.github/actions
+      with:
+        release_type: 'prod'
     
-    - name: Create and push RC tag
+    - name: Display created tags
       if: steps.check_changes.outputs.has_changes == 'true'
       run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a ${{ steps.tag.outputs.rc_tag }} -m "Release candidate ${{ steps.tag.outputs.rc_tag }}"
-        git push origin ${{ steps.tag.outputs.rc_tag }}
-        echo "Successfully created and pushed RC tag: ${{ steps.tag.outputs.rc_tag }}"
-    
-    - name: Run final validation
-      if: steps.check_changes.outputs.has_changes == 'true'
-      run: |
-        echo "Running final validation before creating release tag..."
-        # All tests already passed in hello-world job
-        echo "All tests passed, ready for final release"
-    
-    - name: Create and push final release tag
-      if: steps.check_changes.outputs.has_changes == 'true'
-      run: |
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a ${{ steps.tag.outputs.final_tag }} -m "Release ${{ steps.tag.outputs.final_tag }}"
-        git push origin ${{ steps.tag.outputs.final_tag }}
-        echo "Successfully created and pushed final release tag: ${{ steps.tag.outputs.final_tag }}"
+        echo "✅ Successfully created production release!"
+        echo "Final tag: ${{ steps.release.outputs.tag_name }}"
+        echo "Release type: ${{ steps.release.outputs.release_type }}"
     
     - name: No changes detected
       if: steps.check_changes.outputs.has_changes == 'false'
       run: |
         echo "⏭️ Skipping release - no new changes since last release tag"
+
 
 
 
