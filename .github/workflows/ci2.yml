@@ -1,0 +1,67 @@
+name: Hello World CI
+
+on:
+  push:
+    branches: [ main, dev1, stable ]
+  pull_request:
+    branches: [ main, dev1, stable ]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [3.8, 3.9, 3.10]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v3
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set up C compiler
+      uses: actions/setup-gcc@v1
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest
+
+    - name: Build Python project
+      run: |
+        python setup.py build
+
+    - name: Build C project
+      run: |
+        gcc hello_world.c -o hello_world
+
+    - name: Run Python tests
+      run: |
+        pytest tests/
+
+    - name: Run C program
+      run: |
+        ./hello_world
+
+  release:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/stable'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Create Release
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        VERSION=$(date +'v%Y.%m.%d')
+        gh release create $VERSION \
+          --repo ${{ github.repository }} \
+          --title "Release $VERSION" \
+          --notes "Automated release of hello world project"
